@@ -1,0 +1,330 @@
+---
+title: "Exploring the BRFSS data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+```
+
+### Load data
+
+```{r load-data}
+load("brfss2013.RData")
+```
+
+* * *
+
+## Part 1: Data
+
+The BRFSS data are collected through phone surveys. Since this is merely an observational study, the data do not support causality statements. The study uses random sampling: Data is collected from randomly selected phone users (both land line and cell phone). The results are therefore generalizable, albeit with some limitations: Only adults over 18 years of age were surveyed, and the data collection method excluded some portion of the population, namely the institutionalized or incarcerated, and anyone who has neither a cell phone nor a land line. Group homes were also not eligible to be surveyed. Therefore, some parts of the population with unique health characteristics may not be well represented by the data. This includes homeless people, people with mental or physical health issues severe enough to demand long-term in-patient care, and the prison population.
+
+* * *
+
+## Part 2: Research questions
+
+**Research question 1:**
+
+Is smoking more common among people with mental health issues when compared to people without such issues?
+
+There is often a comorbidity of mental health issues and addictions. For this question, I will look at the BRFSS data to see whether they support a positive correlation between mental health issues and smoking.
+
+To answer this question, the following variables will be considered:
+
+* How often the respondent felt nervous in the past 30 days (*misnervs*)
+* How often the respondent felt hopeless in the past 30 days (*mishopls*)
+* How often the respondent felt restless in the past 30 days (*misrstls*)
+* How often the respondent felt depressed in the past 30 days (*misdeprd*)
+* How often the respondent felt like everything was an effort in the past 30 days (*miseffrt*)
+* How often the respondent felt worthless in the past 30 days (*miswtles*)
+* Computed smoking status (*X_smoker3*)
+
+**Research question 2:**
+
+Does the data suggest that a diagnosis of one of the chronic lung diseases motivates people to quit smoking?
+
+COPD, emphysema and chronic bronchitis are serious lung diseases. Smoking is a major risk factor, and smoking cessation is typically part of the treatment. In light of this, one might hypothesize that smokers who receive such a diagnosis are more likely to quit smoking than smokers who have not.
+
+To answer this question, the following variables will be considered:
+
+* Whether the respondent has previously received a diagnosis of COPD, emphysema or chronic bronchitis (*chccopd1*)
+* Computed smoking status (*X_smoker3*)
+
+**Research question 3:**
+
+Are poor people less likely to get vaccinations?
+
+Vaccination is most effective when a large proportion of the population is immunized due to an effect called herd immunity. When herd immunity is given, the vaccination efforts will also protect unvaccinated individuals, such as people who cannot receive a vaccination because they are immunocompromised. If the data suggest that low income is associated with fewer vaccinations, further research could be carried out to determine whether subsidizing vaccinations for poor people would help achieve a more broadly immunized population.
+
+To answer this questions, the following variables will be considered:
+
+* The respondent's income category (*income2*)
+* Whether the respondent has received a flu shot or spray within the last 12 months (*flushot6*)
+* Whether the respondent received a tetanus shot since 2005, and whether it was the Tdap vaccine, which also has the vaccine for pertussis (*tetanus*)
+* Whether the respondent has ever received a pneumonia shot (*pneuvac3*)
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+**Research question 1:**
+
+Looking at the codebook tells us that all of the variables to be used here are categorical, so summary statistics like means and standard deviations are not useful here. Instead, it makes sense to look at the case numbers, relative frequencies of the different categories, and contingency tables.
+
+First, let's get an idea of how many cases we have that would be useable in the planned analysis. Since most of the variables I want to use here come from an optional module, and since both smoking and mental health issues carry a social stigma, it is possible that few respondents have chosen to answer these questions. If this analysis were based on only a small number of cases, I should at least be aware of this.
+Missing values are coded as NA in the data set:
+
+```{r}
+brfss2013 %>% filter(!is.na(misnervs)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+brfss2013 %>% filter(!is.na(mishopls)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+brfss2013 %>% filter(!is.na(misrstls)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+brfss2013 %>% filter(!is.na(misdeprd)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+brfss2013 %>% filter(!is.na(miseffrt)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+brfss2013 %>% filter(!is.na(miswtles)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+```
+
+Response rates to the mental health questions are indeed fairly low, just over 7%. 
+
+```{r}
+brfss2013 %>% filter(!is.na(X_smoker3)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+```
+
+For the computed smoking status variable, a (computed) value is available for almost all cases (just under 97%).
+
+```{r}
+brfss2013 %>% filter(!is.na(misrstls), !is.na(mishopls), !is.na(misrstls), !is.na(misdeprd), !is.na(miseffrt), !is.na(miswtles), !is.na(X_smoker3)) %>% summarize(count = n(), percent_total = n() * 100 / nrow(brfss2013))
+```
+
+All in all, there are 35291 cases where respondents have answered all the questions I want to use. Let's say this is satisfactory.
+
+Next, I am going to fold the variables pertaining to mental health into one (admittedly very crude) mental health issue (MHI) score. For each variable, the answer "All" will get three points, the answer "Most" will get 2 points, the answer "Some" will get one point. All other responses - "A little", "None" or no response (coded as NA) will get 0 points. The resulting value will be stored in a new variable called *mhis* (for Mental Health Issue Score):
+
+```{r}
+with_mhis <- brfss2013 %>% mutate(mhis = 
+  ifelse(misnervs == "All", 3, ifelse(misnervs == "Most", 2, ifelse(misnervs == "Some", 1, 0))) +
+  ifelse(mishopls == "All", 3, ifelse(mishopls == "Most", 2, ifelse(mishopls == "Some", 1, 0))) +
+  ifelse(misrstls == "All", 3, ifelse(misrstls == "Most", 2, ifelse(misrstls == "Some", 1, 0))) +
+  ifelse(misdeprd == "All", 3, ifelse(misdeprd == "Most", 2, ifelse(misdeprd == "Some", 1, 0))) +
+  ifelse(miseffrt == "All", 3, ifelse(miseffrt == "Most", 2, ifelse(miseffrt == "Some", 1, 0))) +
+  ifelse(miswtles == "All", 3, ifelse(miswtles == "Most", 2, ifelse(miswtles == "Some", 1, 0)))
+)
+```
+
+Since this new variable's character is more numerical than categorical, it makes sense to compute some summary statistics for it:
+
+```{r}
+with_mhis %>%
+    filter(!is.na(mhis)) %>%
+    summarize(mean = mean(mhis, na.rm = T), sd = sd(mhis, na.rm = T), median = median(mhis, na.rm = T), n = n())
+```
+
+The mean and median of the MHI score are both very low, 1.15 and 0, respectively, meaning that most respondents seem to be doing well in terms of mental health. There is some variability in the MHI score, though, indicated by the standard deviation of 2.4. These statistics are based on 35244 cases.
+
+Let's look at how these values are distributed graphically. We're going to filter out all cases where the MHI score is not available - they don't add information to the plot and just cause a warning.
+
+```{r}
+with_mhis %>%
+  filter(!is.na(mhis)) %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = mhis)) +
+    labs(x = "Mental Health Issue Score")
+```
+
+Unsurprisingly, we're seeing a right-skewed distribution with a minimum of 0 (the lowest possible score, indicating no mental health issues) and a maximum of 18 (the highest possible score, suggesting some mental health issues). As was to be expected from the mean and median, most of the cases have a low MHI score of 0 or 1.
+
+To get a better idea of how many cases we're looking at for the individual scores, let's look a bit more closely at the MHI scores in the tail end:
+
+```{r}
+with_mhis %>%
+  filter(!is.na(mhis), between(mhis, 10, 18)) %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = mhis)) +
+    labs(x = "Mental Health Issue Score")
+```
+
+It becomes clear from this plot that very few cases are left at the high MHI scores, so let's look at the exact counts here:
+
+```{r}
+with_mhis %>%
+  select(mhis) %>%
+  count(mhis)
+```
+
+We should keep this in mind when interpreting results from this EDA.
+
+Next, let's look at the proportions of smoking across the different MHI scores. Again, we are going to filter out all cases with a NA value for the MHI score. However, for the variable *X_smoker3*, we're going to retain the cases with NA values.
+
+```{r}
+with_mhis %>%
+  filter(!is.na(mhis)) %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = mhis, fill = X_smoker3), position="fill") +
+    labs(x = "Mental Health Issue Score", y = "Relative counts") +
+    scale_fill_discrete(name="Smoking status")
+```
+
+Looking at this plot, it looks like a higher MHI score is indeed associated with a tendency to smoke. People with no indicators of mental health issues are by far the least likely to smoke daily or even just some days. They are also more likely to never have smoked in the first place. On the other hand, the trend for people who say they smoke everyday looks clear: A higher MHI score seems clearly associated with everyday smoking.
+Two values that seem to break the trends are MHI scores 14 and 15. Referring back to the number of cases for each MHI score, it turns out that these two values also happen the be the ones with the smallest numbers of cases. It is therefore possible that this apparent breaking of the trend is simply a fluke caused by insufficient data points.
+
+We can look at this data from an additional angle, focusing on the sample statistics as reflected in a box plot:
+
+```{r}
+with_mhis %>%
+  filter(!is.na(mhis)) %>%
+  ggplot() +
+    geom_boxplot(mapping = aes(x = X_smoker3, y = mhis)) +
+    coord_flip() +
+    labs(y = "Mental Health Issue Score", x = "Smoking status") +
+    scale_x_discrete(name="Smoking status", labels = c("Current smoker,\nevery day", "Current smoker,\nsome days", "Former smoker", "Never smoked", "NA"))
+```
+
+This plot also points to a positive association of mental health issues and smoking - the distributions of MHI scores for non-smokers are much narrower with the median at 0, while those for smokers are wider with the median around 1. All distributions have outliers at high MHI score values, though. 
+
+To summarize, mental health issues do appear to be positively correlated with smoking, but since the numbers of cases drop off towards the higher MHI scores, this result should be taken with a grain of salt.
+
+**Research question 2:**
+
+Once again, a look at the codebook tells us that both variables, *chccopd1* and *X_smoker3*, are categorical variables. Let's see how the numbers of cases compare for each of these variables:
+
+```{r}
+brfss2013 %>% select(chccopd1) %>% count(chccopd1)
+brfss2013 %>% select(X_smoker3) %>% count(X_smoker3)
+```
+
+Looking at these counts, it becomes apparent that we have a good number of cases with non-missing values for all levels in both variables.
+
+Next, let's look at the proportions of smoking status, broken down by lung disease diagnosis:
+
+```{r}
+brfss2013 %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = chccopd1, fill = X_smoker3), position="fill") +
+    labs(x = "Chronic lung disease diagnosis", y = "Relative counts") +
+    scale_fill_discrete(name="Smoking status", labels = c("Current smoker,\nevery day", "Current smoker,\nsome days", "Former smoker", "Never smoked", "NA"))
+```
+
+This plot is difficult to interpret in the light of our research question - we want to know whether having received a diagnosis for a chronic lung disease motivates people to quit smoking. In this plot, the proportions are heavily influenced by people who have never smoked in the first place. These cases are both confusing and not relevant to our question, so let's remove them from the graph:
+
+```{r}
+brfss2013 %>%
+  filter(X_smoker3 != "Never smoked") %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = chccopd1, fill = X_smoker3), position="fill") +
+    labs(x = "Chronic lung disease diagnosis", y = "Relative counts") +
+    scale_fill_discrete(name="Smoking status", labels = c("Current smoker,\nevery day", "Current smoker,\nsome days", "Former smoker", "Never smoked", "NA"))
+```
+
+Based on this graph, it does not look like receiving a diagnosis for a chronic lung disease is associated with successfully quitting smoking: The proportion of daily smokers is higher among those with a diagnosis than those without one, and the proporting of former smokers is lower.
+
+Maybe this is a fluke caused by a tiny number of cases in either of the categories?
+
+```{r}
+brfss2013 %>%
+  filter(X_smoker3 != "Never smoked") %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = chccopd1, fill = X_smoker3)) +
+    labs(x = "Chronic lung disease diagnosis") +
+    scale_fill_discrete(name="Smoking status")
+```
+
+The case numbers for people with and without a diagnosis are unevenly matched, but there is still a fairly large number of cases for the categories "Yes" and "No".
+
+To summarize, the data seem to suggest that receiving a diagnosis of a chronic lung disease is not sufficient to motivate a smoker to quit smoking.
+
+**Research question 3:**
+
+Let's look briefly at the values and case numbers for the variables we'll be using. Once again, all our variables are categorical.
+
+```{r}
+brfss2013 %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = income2)) +
+    labs(x = "Income category") +
+    coord_flip()
+```
+
+The numbers of cases are fairly large for all income categories, although it should be noted that respondondents with an income of $75,000 or more are the best-represented group in this sample, and the case numbers for people with very low incomes are significantly smaller (but still over 20,000).
+
+```{r}
+brfss2013 %>% count(flushot6)
+```
+
+The vast majority of the cases that have data available for this variable, and the number of cases that say they have received a flu shot within the last 12 months is very close to the number of cases that say they have not.
+
+```{r}
+brfss2013 %>% count(tetanus)
+```
+
+Again, most cases have data available for this variable, with more respondents answering some variation of "Yes" versus "No". The same is true for the variable that captures whether the respondent has ever had the pneumococcal cavvine:
+
+```{r}
+brfss2013 %>% count(pneuvac3)
+```
+
+So let's see how the different income categories look with regards to vaccination. To account for the unequal numbers of cases for the different income levels, we will look at the proportions of vaccinations within each income level instead of the total numbers.
+Let's start with the distributions of flu vaccinations:
+
+```{r}
+brfss2013 %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = income2, fill = flushot6), position = "fill") +
+    coord_flip() +
+    labs(x = "Income category", y = "Relative counts") +
+    scale_fill_discrete("Received flu shot\nin last 12 months?")
+```
+
+This plot shows a positive association between income and flu vaccination: The higher someone's income, the more likely they are to respond that they have received a flu shut in the last 12 months. The lower someone's income, the more likely it is that they have not received such a vaccination.
+
+Next, we will look at the data for Tetanus shots:
+
+```{r}
+brfss2013 %>%
+ggplot() +
+  geom_bar(mapping = aes(x = income2, fill = tetanus), position = "fill") +
+  coord_flip() +
+  labs(x = "Income category", y = "Relative counts") +
+  scale_fill_manual(name = "Tetanus shot since 2005?",
+                    labels = c("Yes, Tdap", "Yes, but not Tdap", "Yes, but not sure\nwhat type", "No", "NA"),
+                    values = c("#76d4ff", "#56b4ef", "#3694cf", "#e69f00", "#999999"), na.value="#777777")
+```
+
+For Tetanus shots, a similar pattern emerges: there seems to be a positive association between income and tetanus vaccination, albeit slightly less pronounced.
+
+```{r}
+brfss2013 %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = income2, fill = pneuvac3), position = "fill") +
+    coord_flip() +
+    labs(x = "Income category", y = "Relative counts") +
+    scale_fill_discrete("Ever received\npneumococcal vaccine?")
+```
+
+For the pneumococcal vaccine, however, the trend seems to be reversed: here, income is negatively associated with having received the vaccine. Additionally, the income group "Less than $10,000" seems to break the trend.
+
+One possible explanation for this is the age of the respondents. The immunization guidelines recommend vaccinating those most at risk, which includes anyone over 65 years of age. Wikipedia writes:
+
+"The current guidelines of the American College of Physicians call for administration of the immunization between ages 2 and 65 when indicated, or at age 65." (https://en.wikipedia.org/wiki/Pneumococcal_vaccine)
+
+Looking at the distribution of people over 65 across the income groups, it turns out that they make up more of the middle and lower income groups:
+
+```{r}
+brfss2013 %>%
+  ggplot() +
+    geom_bar(mapping = aes(x = income2, fill = X_age65yr), position = "fill") +
+    coord_flip() +
+    labs(x = "Income category", y = "Relative counts") +
+    scale_fill_discrete("Age group")
+```
+
+This suggests that in the case of the pneumococcal vaccine, age may be a more important factor for determining whether someone has received the vaccination.
+
+Interestingly, the income group "Less than $10,000" also breaks the trend here, just as it did in the plot for pneumococcal vaccination across income groups, which further supports the hypothesis that age may be a more important factor than income for this variable.
